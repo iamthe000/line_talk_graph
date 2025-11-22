@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>グループLINE 発言数ランキング</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: "Meiryo", "Yu Gothic", sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: #00B900;
+        }
+        p.description {
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            background: #fafafa;
+            cursor: pointer;
+            transition: border-color 0.3s;
+            margin-bottom: 20px;
+        }
+        .upload-area:hover {
+            border-color: #00B900;
+            background: #f0fff0;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .upload-btn {
+            background: #00B900;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 50px;
+            font-weight: bold;
+            display: inline-block;
+            cursor: pointer;
+        }
+        
+        /* 結果表示エリア */
+        .result-section {
+            display: none; /* 初期は非表示 */
+            margin-top: 30px;
+        }
+        .stats-summary {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+            background: #eee;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .stat-box {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 500px; /* グラフの高さ */
+            width: 100%;
+            margin-bottom: 30px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f8f8;
+        }
+        .rank-col { width: 60px; text-align: center; }
+        .count-col { text-align: right; font-weight: bold; }
+        .bar-col { width: 150px; }
+        .bar-bg { background: #eee; height: 8px; border-radius: 4px; overflow: hidden; }
+        .bar-fill { background: #00B900; height: 100%; }
+        
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>グループLINE 発言数ランキング</h1>
+    <p class="description">
+        LINEのグループトーク設定から「トーク履歴を送信」で保存した<br>
+        テキストファイル(.txt)を読み込んでください。
+    </p>
+
+    <div class="upload-area" id="dropZone">
+        <p>ここにファイルをドラッグ＆ドロップ</p>
+        <p>または</p>
+        <label class="upload-btn">
+            ファイルを選択
+            <input type="file" id="fileInput" accept=".txt">
+        </label>
+    </div>
+
+    <div class="result-section" id="resultSection">
+        <div class="stats-summary">
+            <div class="stat-box">
+                <div class="stat-value" id="totalMessages">0</div>
+                <div class="stat-label">総メッセージ数</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="activeUsers">0</div>
+                <div class="stat-label">参加人数</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="dateRange">-</div>
+                <div class="stat-label">期間</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="rankingChart"></canvas>
+        </div>
+
+        <h3>詳細ランキング</h3>
+        <table id="rankingTable">
+            <thead>
+                <tr>
+                    <th class="rank-col">順位</th>
+                    <th>名前</th>
+                    <th class="count-col">発言数</th>
+                    <th class="bar-col">割合</th>
+                </tr>
+            </thead>
+            <tbody>
+                </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+    const resultSection = document.getElementById('resultSection');
+    let myChart = null;
+
+    // ドラッグ＆ドロップの挙動
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = '#00B900'; });
+    dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZone.style.borderColor = '#ccc'; });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#ccc';
+        const files = e.dataTransfer.files;
+        if (files.length) processFile(files[0]);
+    });
+
+    // クリック選択の挙動
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length) processFile(e.target.files[0]);
+    });
+
+    function processFile(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target.result;
+            analyzeText(text);
+        };
+        reader.readAsText(file, 'UTF-8');
+    }
+
+    function analyzeText(text) {
+        const lines = text.split(/\r\n|\r|\n/);
+        const userCounts = {};
+        let totalCount = 0;
+        let firstDate = null;
+        let lastDate = null;
+
+        // 日付の正規表現 (例: 2023/01/01(月))
+        const dateRegex = /^(\d{4}\/\d{1,2}\/\d{1,2})/;
+        // メッセージ行の正規表現: 時間[TAB]名前[TAB]本文
+        // 例: 12:34[TAB]山田太郎[TAB]こんにちは
+        const messageRegex = /^(\d{1,2}:\d{2})\t([^\t]+)\t(.*)/;
+
+        lines.forEach(line => {
+            // 日付チェック
+            const dateMatch = line.match(dateRegex);
+            if (dateMatch) {
+                if (!firstDate) firstDate = dateMatch[1];
+                lastDate = dateMatch[1];
+                return;
+            }
+
+            // メッセージ行チェック
+            const match = line.match(messageRegex);
+            if (match) {
+                const name = match[2];
+                // システムメッセージの除外（簡易的）
+                // 名前に特定のキーワードが含まれる場合や、タブ構造がない場合は除外される
+                
+                // カウント
+                if (!userCounts[name]) userCounts[name] = 0;
+                userCounts[name]++;
+                totalCount++;
+            }
+        });
+
+        // 集計結果を配列に変換してソート
+        const sortedData = Object.entries(userCounts)
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => b.count - a.count);
+
+        if (sortedData.length === 0) {
+            alert("有効なトーク履歴が見つかりませんでした。LINEのテキスト形式(タブ区切り)であることを確認してください。");
+            return;
+        }
+
+        displayResults(sortedData, totalCount, firstDate, lastDate);
+    }
+
+    function displayResults(data, total, firstDate, lastDate) {
+        resultSection.style.display = 'block';
+        
+        // 統計情報の更新
+        document.getElementById('totalMessages').textContent = total.toLocaleString();
+        document.getElementById('activeUsers').textContent = data.length;
+        document.getElementById('dateRange').textContent = 
+            (firstDate && lastDate) ? `${firstDate} 〜 ${lastDate}` : "不明";
+
+        // グラフ描画
+        renderChart(data);
+
+        // テーブル描画
+        const tbody = document.querySelector('#rankingTable tbody');
+        tbody.innerHTML = '';
+        data.forEach((item, index) => {
+            const percent = Math.round((item.count / total) * 100);
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="rank-col">${index + 1}</td>
+                <td>${item.name}</td>
+                <td class="count-col">${item.count.toLocaleString()}</td>
+                <td class="bar-col">
+                    <div class="bar-bg">
+                        <div class="bar-fill" style="width: ${percent}%"></div>
+                    </div>
+                    <div style="font-size:10px; text-align:right; color:#888;">${percent}%</div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function renderChart(data) {
+        const ctx = document.getElementById('rankingChart').getContext('2d');
+        const topData = data.slice(0, 20); // 上位20名まで表示（多すぎると見づらいため）
+
+        if (myChart) myChart.destroy();
+
+        myChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: topData.map(d => d.name),
+                datasets: [{
+                    label: '発言回数',
+                    data: topData.map(d => d.count),
+                    backgroundColor: 'rgba(0, 185, 0, 0.6)',
+                    borderColor: 'rgba(0, 185, 0, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y', // 横棒グラフ
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    x: { beginAtZero: true }
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
