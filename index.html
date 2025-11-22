@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LINEトーク履歴 ランキング＆グラフ化ツール</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: "Meiryo", "Yu Gothic", sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: #00B900; /* LINE Green */
+        }
+        .controls {
+            padding: 20px;
+            background: #eee;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 250px;
+        }
+        /* メインレイアウト: 左テーブル、右グラフ */
+        .main-content {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .panel-left {
+            flex: 1;
+            min-width: 300px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .panel-right {
+            flex: 2;
+            min-width: 400px;
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        /* テーブルデザイン */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            text-align: left;
+        }
+        th {
+            background-color: #f8f8f8;
+            position: sticky;
+            top: 0;
+        }
+        .col-rank { width: 50px; text-align: center; }
+        .col-count { text-align: right; }
+        
+        /* ローディング表示 */
+        #loading {
+            display: none;
+            color: #666;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>LINEトーク履歴 ランキング＆グラフ化ツール (Web版)</h1>
+
+    <div class="controls">
+        <div class="control-group">
+            <label for="fileInput">1. txtファイルを選択 (複数選択可)</label>
+            <input type="file" id="fileInput" multiple accept=".txt">
+            <span style="font-size: 12px; color: #666;">※ ShiftキーやCtrlキーを押しながら複数選んでください</span>
+        </div>
+
+        <div class="control-group">
+            <label for="excludeInput">2. 除外するニックネーム (カンマ区切り)</label>
+            <input type="text" id="excludeInput" placeholder="例: 山田, 田中" oninput="updateDisplay()">
+        </div>
+
+        <div id="loading">解析中...</div>
+    </div>
+
+    <div class="main-content">
+        <div class="panel-left">
+            <table id="rankingTable">
+                <thead>
+                    <tr>
+                        <th class="col-rank">順位</th>
+                        <th>ニックネーム</th>
+                        <th class="col-count">行数 (トーク量)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="3" style="text-align:center;">ファイルを選択してください</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="panel-right">
+            <canvas id="myChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script>
+    // グローバル変数としてデータを保持
+    let rawData = [];
+    let chartInstance = null;
+
+    const fileInput = document.getElementById('fileInput');
+    const excludeInput = document.getElementById('excludeInput');
+    const loading = document.getElementById('loading');
+
+    // ファイル選択時のイベント
+    fileInput.addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+
+        loading.style.display = 'block';
+        rawData = []; // 初期化
+
+        // 非同期でファイルを読み込む
+        const promises = files.map(file => readFile(file));
+        
+        try {
+            rawData = await Promise.all(promises);
+            // 行数が多い順にソート
+            rawData.sort((a, b) => b.count - a.count);
+            updateDisplay();
+        } catch (err) {
+            alert("ファイルの読み込みに失敗しました: " + err);
+        } finally {
+            loading.style.display = 'none';
+        }
+    });
+
+    // 単一ファイルを読み込んで行数を数える関数
+    function readFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            
+            reader.onload = (event) => {
+                const text = event.target.result;
+                // 改行コードで分割して行数をカウント (空行も含む: 元のPythonコード準拠)
+                const lines = text.split(/\r\n|\r|\n/);
+                
+                // ファイル名から拡張子を除去してニックネームにする
+                let nickname = file.name.replace(/\.[^/.]+$/, "");
+                
+                resolve({ name: nickname, count: lines.length });
+            };
+
+            reader.onerror = (err) => reject(err);
+
+            // LINEの履歴は通常UTF-8だが、環境によってはShift-JISの場合もある。
+            // ここでは基本UTF-8として読み込む。
+            reader.readAsText(file, 'UTF-8');
+        });
+    }
+
+    // 表示（表とグラフ）を更新する関数
+    function updateDisplay() {
+        if (rawData.length === 0) return;
+
+        // 除外リストの取得
+        const excludeText = excludeInput.value;
+        const excludeNames = excludeText.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
+        // フィルタリング
+        const filteredData = rawData.filter(d => !excludeNames.includes(d.name));
+
+        renderTable(filteredData);
+        renderChart(filteredData);
+    }
+
+    // テーブル描画
+    function renderTable(data) {
+        const tbody = document.querySelector('#rankingTable tbody');
+        tbody.innerHTML = '';
+
+        data.forEach((item, index) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="col-rank">${index + 1}</td>
+                <td>${item.name}</td>
+                <td class="col-count">${item.count.toLocaleString()}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        if (data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;">データがありません</td></tr>';
+        }
+    }
+
+    // グラフ描画 (Chart.js)
+    function renderChart(data) {
+        const ctx = document.getElementById('myChart').getContext('2d');
+
+        // グラフ用のデータ配列作成
+        // 上位が上に来るように、Chart.jsの横棒グラフはインデックス0が上に来るのでそのままでOKだが、
+        // 通常のXY軸だと下から積み上がるため、直感的に合わせるならデータはそのままでOK
+        const names = data.map(d => d.name);
+        const counts = data.map(d => d.count);
+
+        // 既存のチャートがあれば破棄
+        if (chartInstance) {
+            chartInstance.destroy();
+        }
+
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: names,
+                datasets: [{
+                    label: 'トーク履歴の総行数',
+                    data: counts,
+                    backgroundColor: 'skyblue',
+                    borderColor: '#87CEEB',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y', // 横向き棒グラフ (Matplotlibのbarh相当)
+                responsive: true,
+                maintainAspectRatio: false, // コンテナに合わせてリサイズ
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'トーク量 ランキング比較',
+                        font: { size: 18 }
+                    },
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        grid: {
+                            borderDash: [5, 5]
+                        }
+                    },
+                    y: {
+                        // 項目が多い場合に自動で高さを確保する仕組みはCSS側で制御
+                        ticks: {
+                            autoSkip: false // 全ての名前を表示
+                        }
+                    }
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
