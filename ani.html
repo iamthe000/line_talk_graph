@@ -3,79 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LINEトーク推移 アニメーションツール</title>
+    <title>LINEトーク履歴：レーシングバーチャート</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: "Meiryo", sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
-        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        h1 { text-align: center; color: #00B900; }
-        .controls { padding: 20px; background: #eee; border-radius: 5px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; }
-        .chart-container { position: relative; height: 600px; width: 100%; }
-        #dateDisplay { font-size: 24px; font-weight: bold; text-align: center; margin-bottom: 10px; color: #555; }
-        .btn-group { display: flex; gap: 10px; justify-content: center; }
-        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; background: #00B900; color: white; font-weight: bold; }
-        button:disabled { background: #ccc; }
+        body { font-family: "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 20px; background-color: #f0f2f5; }
+        .container { max-width: 1100px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #00B900; margin-bottom: 30px; }
+        .controls { background: #fafafa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 25px; display: flex; flex-direction: column; gap: 15px; }
+        #dateDisplay { font-size: 36px; font-weight: bold; text-align: right; color: #333; font-variant-numeric: tabular-nums; letter-spacing: 2px; }
+        .chart-container { position: relative; height: 600px; width: 100%; background: white; }
+        .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+        button { padding: 12px 25px; cursor: pointer; border: none; border-radius: 6px; background: #00B900; color: white; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #009e00; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .record-btn { background: #e91e63; }
+        .record-btn:hover { background: #c2185b; }
+        #loading { text-align: center; font-weight: bold; color: #666; display: none; }
+        .status-msg { text-align: center; color: #e91e63; font-weight: bold; margin-top: 10px; min-height: 1.2em; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>LINEトーク推移 アニメーション</h1>
+    <h1>LINE Talk History Race</h1>
 
     <div class="controls">
-        <label>1. txtファイルを選択 (複数選択)</label>
+        <label style="font-weight: bold;">1. LINEのトーク履歴(.txt)を複数選択してください</label>
         <input type="file" id="fileInput" multiple accept=".txt">
+        
+        <div id="loading">データを解析中...</div>
+
         <div class="btn-group">
-            <button id="startBtn" disabled>アニメーション再生</button>
+            <button id="startBtn" disabled>レース再生</button>
+            <button id="recordBtn" class="record-btn" disabled>録画して保存</button>
             <button id="resetBtn" disabled>リセット</button>
         </div>
-        <div id="loading" style="display:none; text-align:center;">解析中...</div>
+        <div id="statusMsg" class="status-msg"></div>
     </div>
 
-    <div id="dateDisplay">日付: ---</div>
+    <div id="dateDisplay">---</div>
     <div class="chart-container">
         <canvas id="myChart"></canvas>
     </div>
 </div>
 
 <script>
-    let dailyData = {}; // { "2023/01/01": { "名前": 累計数, ... } }
+    let dailyData = {}; 
     let allDates = [];
-    let allNames = new Set();
+    let allNames = [];
+    let nameToColor = {};
     let chartInstance = null;
     let animationId = null;
     let currentDateIdx = 0;
+    
+    let mediaRecorder;
+    let recordedChunks = [];
+    let videoExtension = 'webm'; // デフォルト
 
     const fileInput = document.getElementById('fileInput');
     const startBtn = document.getElementById('startBtn');
+    const recordBtn = document.getElementById('recordBtn');
     const resetBtn = document.getElementById('resetBtn');
     const dateDisplay = document.getElementById('dateDisplay');
+    const loading = document.getElementById('loading');
+    const statusMsg = document.getElementById('statusMsg');
+
+    const colorPalette = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#8bc34a', '#e91e63', '#00bcd4', '#ffc107'];
 
     fileInput.addEventListener('change', async (e) => {
         const files = Array.from(e.target.files);
         if (files.length === 0) return;
 
-        document.getElementById('loading').style.display = 'block';
-        
-        // データの初期化
+        loading.style.display = 'block';
         dailyData = {};
-        allNames = new Set();
-        const rawLogs = {}; // { name: [dates] }
+        allNames = [];
 
-        for (const file of files) {
-            const name = file.name.replace(/\.[^/.]+$/, "");
-            allNames.add(name);
-            const text = await file.text();
+        for (let i = 0; i < files.length; i++) {
+            const name = files[i].name.replace(/\.[^/.]+$/, "");
+            allNames.push(name);
+            nameToColor[name] = colorPalette[i % colorPalette.length];
+            const text = await files[i].text();
             const lines = text.split(/\r\n|\r|\n/);
-            
             let currentFileDate = "";
-            const dateRegex = /^(\d{4}\/\d{2}\/\d{2})/; // 2023/10/01 形式
+            const dateRegex = /^(\d{4}\/\d{2}\/\d{2})/;
 
             lines.forEach(line => {
                 const match = line.match(dateRegex);
-                if (match) {
-                    currentFileDate = match[1];
-                }
+                if (match) currentFileDate = match[1];
                 if (currentFileDate) {
                     if (!dailyData[currentFileDate]) dailyData[currentFileDate] = {};
                     dailyData[currentFileDate][name] = (dailyData[currentFileDate][name] || 0) + 1;
@@ -83,13 +97,9 @@
             });
         }
 
-        // 全ての日付をソートして補完
         allDates = Object.keys(dailyData).sort();
-        
-        // 累積和の計算
         let cumulative = {};
         allNames.forEach(n => cumulative[n] = 0);
-        
         allDates.forEach(date => {
             allNames.forEach(name => {
                 cumulative[name] += (dailyData[date][name] || 0);
@@ -99,8 +109,10 @@
 
         initChart();
         startBtn.disabled = false;
+        recordBtn.disabled = false;
         resetBtn.disabled = false;
-        document.getElementById('loading').style.display = 'none';
+        loading.style.display = 'none';
+        dateDisplay.innerText = allDates[0];
     });
 
     function initChart() {
@@ -108,74 +120,134 @@
         if (chartInstance) chartInstance.destroy();
 
         const initialDate = allDates[0];
-        const data = Array.from(allNames).map(name => ({
-            name: name,
-            value: dailyData[initialDate][name]
-        })).sort((a, b) => b.value - a.value);
+        const sortedData = getSortedData(initialDate);
 
         chartInstance = new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: data.map(d => d.name),
+                labels: sortedData.map(d => d.name),
                 datasets: [{
-                    label: '累計トーク行数',
-                    data: data.map(d => d.value),
-                    backgroundColor: 'rgba(0, 185, 0, 0.6)',
-                    borderColor: '#00B900',
-                    borderWidth: 1
+                    data: sortedData.map(d => d.value),
+                    backgroundColor: sortedData.map(d => nameToColor[d.name]),
+                    borderWidth: 0,
+                    borderRadius: 5
                 }]
             },
             options: {
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: { duration: 400, easing: 'linear' },
-                scales: { x: { beginAtZero: true } },
+                animation: { 
+                    duration: 600, // 入れ替わりの時間を少し長くして視認性をアップ
+                    easing: 'easeInOutCubic' // 加速・減速をつけて「抜かされる感」を演出
+                },
+                scales: {
+                    x: { beginAtZero: true },
+                    y: { grid: { display: false }, ticks: { font: { size: 16, weight: 'bold' } } }
+                },
                 plugins: { legend: { display: false } }
             }
         });
-        dateDisplay.innerText = `日付: ${initialDate}`;
     }
 
-    async function updateChart(dateIdx) {
-        const date = allDates[dateIdx];
-        dateDisplay.innerText = `日付: ${date}`;
-
-        const data = Array.from(allNames).map(name => ({
+    function getSortedData(date) {
+        return allNames.map(name => ({
             name: name,
-            value: dailyData[date][name]
+            value: dailyData[date][name] || 0
         })).sort((a, b) => b.value - a.value);
+    }
 
-        chartInstance.data.labels = data.map(d => d.name);
-        chartInstance.data.datasets[0].data = data.map(d => d.value);
+    function updateChart(dateIdx) {
+        const date = allDates[dateIdx];
+        dateDisplay.innerText = date;
+        const sortedData = getSortedData(date);
+        chartInstance.data.labels = sortedData.map(d => d.name);
+        chartInstance.data.datasets[0].data = sortedData.map(d => d.value);
+        chartInstance.data.datasets[0].backgroundColor = sortedData.map(d => nameToColor[d.name]);
         chartInstance.update();
+    }
+
+    function startRace(onComplete) {
+        // アニメーションのduration(600)と揃えることで、滑らかに連続して動くようにする
+        animationId = setInterval(() => {
+            if (currentDateIdx < allDates.length - 1) {
+                currentDateIdx++;
+                updateChart(currentDateIdx);
+            } else {
+                clearInterval(animationId);
+                animationId = null;
+                startBtn.innerText = "再生終了";
+                if (onComplete) onComplete();
+            }
+        }, 600); 
     }
 
     startBtn.addEventListener('click', () => {
         if (animationId) {
             clearInterval(animationId);
             animationId = null;
-            startBtn.innerText = "再生再開";
+            startBtn.innerText = "再開";
         } else {
             startBtn.innerText = "一時停止";
-            animationId = setInterval(() => {
-                if (currentDateIdx < allDates.length - 1) {
-                    currentDateIdx++;
-                    updateChart(currentDateIdx);
-                } else {
-                    clearInterval(animationId);
-                    animationId = null;
-                    startBtn.innerText = "再生終了";
-                }
-            }, 500); // 0.5秒ごとに更新
+            startRace();
         }
+    });
+
+    recordBtn.addEventListener('click', () => {
+        currentDateIdx = 0;
+        updateChart(0);
+        recordedChunks = [];
+        
+        const canvas = document.getElementById('myChart');
+        const stream = canvas.captureStream(30);
+
+        // MP4に対応しているかチェックし、対応していればMP4、ダメならWebMを選択
+        let options = { mimeType: 'video/webm; codecs=vp9' };
+        if (MediaRecorder.isTypeSupported('video/mp4')) {
+            options = { mimeType: 'video/mp4' };
+            videoExtension = 'mp4';
+        } else if (MediaRecorder.isTypeSupported('video/webm; codecs=h264')) {
+            options = { mimeType: 'video/webm; codecs=h264' };
+            videoExtension = 'webm';
+        }
+
+        try {
+            mediaRecorder = new MediaRecorder(stream, options);
+        } catch (e) {
+            // フォールバック
+            mediaRecorder = new MediaRecorder(stream);
+        }
+
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(recordedChunks, { type: options.mimeType || 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `line-race-${new Date().getTime()}.${videoExtension}`;
+            a.click();
+            statusMsg.innerText = `${videoExtension.toUpperCase()}形式で保存が完了しました！`;
+            recordBtn.disabled = false;
+        };
+
+        mediaRecorder.start();
+        statusMsg.innerText = "録画中... アニメーション終了までお待ちください";
+        recordBtn.disabled = true;
+
+        startRace(() => {
+            mediaRecorder.stop();
+        });
     });
 
     resetBtn.addEventListener('click', () => {
         clearInterval(animationId);
         animationId = null;
         currentDateIdx = 0;
-        startBtn.innerText = "アニメーション再生";
+        startBtn.innerText = "レース再生";
+        statusMsg.innerText = "";
         updateChart(0);
     });
 </script>
