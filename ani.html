@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LINEトーク推移 アニメーションツール</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: "Meiryo", sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #00B900; }
+        .controls { padding: 20px; background: #eee; border-radius: 5px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; }
+        .chart-container { position: relative; height: 600px; width: 100%; }
+        #dateDisplay { font-size: 24px; font-weight: bold; text-align: center; margin-bottom: 10px; color: #555; }
+        .btn-group { display: flex; gap: 10px; justify-content: center; }
+        button { padding: 10px 20px; cursor: pointer; border: none; border-radius: 4px; background: #00B900; color: white; font-weight: bold; }
+        button:disabled { background: #ccc; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>LINEトーク推移 アニメーション</h1>
+
+    <div class="controls">
+        <label>1. txtファイルを選択 (複数選択)</label>
+        <input type="file" id="fileInput" multiple accept=".txt">
+        <div class="btn-group">
+            <button id="startBtn" disabled>アニメーション再生</button>
+            <button id="resetBtn" disabled>リセット</button>
+        </div>
+        <div id="loading" style="display:none; text-align:center;">解析中...</div>
+    </div>
+
+    <div id="dateDisplay">日付: ---</div>
+    <div class="chart-container">
+        <canvas id="myChart"></canvas>
+    </div>
+</div>
+
+<script>
+    let dailyData = {}; // { "2023/01/01": { "名前": 累計数, ... } }
+    let allDates = [];
+    let allNames = new Set();
+    let chartInstance = null;
+    let animationId = null;
+    let currentDateIdx = 0;
+
+    const fileInput = document.getElementById('fileInput');
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const dateDisplay = document.getElementById('dateDisplay');
+
+    fileInput.addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+
+        document.getElementById('loading').style.display = 'block';
+        
+        // データの初期化
+        dailyData = {};
+        allNames = new Set();
+        const rawLogs = {}; // { name: [dates] }
+
+        for (const file of files) {
+            const name = file.name.replace(/\.[^/.]+$/, "");
+            allNames.add(name);
+            const text = await file.text();
+            const lines = text.split(/\r\n|\r|\n/);
+            
+            let currentFileDate = "";
+            const dateRegex = /^(\d{4}\/\d{2}\/\d{2})/; // 2023/10/01 形式
+
+            lines.forEach(line => {
+                const match = line.match(dateRegex);
+                if (match) {
+                    currentFileDate = match[1];
+                }
+                if (currentFileDate) {
+                    if (!dailyData[currentFileDate]) dailyData[currentFileDate] = {};
+                    dailyData[currentFileDate][name] = (dailyData[currentFileDate][name] || 0) + 1;
+                }
+            });
+        }
+
+        // 全ての日付をソートして補完
+        allDates = Object.keys(dailyData).sort();
+        
+        // 累積和の計算
+        let cumulative = {};
+        allNames.forEach(n => cumulative[n] = 0);
+        
+        allDates.forEach(date => {
+            allNames.forEach(name => {
+                cumulative[name] += (dailyData[date][name] || 0);
+                dailyData[date][name] = cumulative[name];
+            });
+        });
+
+        initChart();
+        startBtn.disabled = false;
+        resetBtn.disabled = false;
+        document.getElementById('loading').style.display = 'none';
+    });
+
+    function initChart() {
+        const ctx = document.getElementById('myChart').getContext('2d');
+        if (chartInstance) chartInstance.destroy();
+
+        const initialDate = allDates[0];
+        const data = Array.from(allNames).map(name => ({
+            name: name,
+            value: dailyData[initialDate][name]
+        })).sort((a, b) => b.value - a.value);
+
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.map(d => d.name),
+                datasets: [{
+                    label: '累計トーク行数',
+                    data: data.map(d => d.value),
+                    backgroundColor: 'rgba(0, 185, 0, 0.6)',
+                    borderColor: '#00B900',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 400, easing: 'linear' },
+                scales: { x: { beginAtZero: true } },
+                plugins: { legend: { display: false } }
+            }
+        });
+        dateDisplay.innerText = `日付: ${initialDate}`;
+    }
+
+    async function updateChart(dateIdx) {
+        const date = allDates[dateIdx];
+        dateDisplay.innerText = `日付: ${date}`;
+
+        const data = Array.from(allNames).map(name => ({
+            name: name,
+            value: dailyData[date][name]
+        })).sort((a, b) => b.value - a.value);
+
+        chartInstance.data.labels = data.map(d => d.name);
+        chartInstance.data.datasets[0].data = data.map(d => d.value);
+        chartInstance.update();
+    }
+
+    startBtn.addEventListener('click', () => {
+        if (animationId) {
+            clearInterval(animationId);
+            animationId = null;
+            startBtn.innerText = "再生再開";
+        } else {
+            startBtn.innerText = "一時停止";
+            animationId = setInterval(() => {
+                if (currentDateIdx < allDates.length - 1) {
+                    currentDateIdx++;
+                    updateChart(currentDateIdx);
+                } else {
+                    clearInterval(animationId);
+                    animationId = null;
+                    startBtn.innerText = "再生終了";
+                }
+            }, 500); // 0.5秒ごとに更新
+        }
+    });
+
+    resetBtn.addEventListener('click', () => {
+        clearInterval(animationId);
+        animationId = null;
+        currentDateIdx = 0;
+        startBtn.innerText = "アニメーション再生";
+        updateChart(0);
+    });
+</script>
+
+</body>
+</html>
