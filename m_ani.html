@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LINEトーク履歴：月間レーシングバーチャート</title>
+    <title>LINEトーク履歴：月間発言数推移</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 20px; background-color: #f0f2f5; }
@@ -25,7 +25,7 @@
 <body>
 
 <div class="container">
-    <h1>LINE Talk History Monthly Race</h1>
+    <h1>LINE Talk History Monthly Activity</h1>
 
     <div class="controls">
         <label style="font-weight: bold;">1. LINEのトーク履歴(.txt)を複数選択してください</label>
@@ -98,14 +98,6 @@
         }
 
         allDates = Object.keys(dailyData).sort();
-        let cumulative = {};
-        allNames.forEach(n => cumulative[n] = 0);
-        allDates.forEach(date => {
-            allNames.forEach(name => {
-                cumulative[name] += (dailyData[date][name] || 0);
-                dailyData[date][name] = cumulative[name];
-            });
-        });
 
         initChart();
         startBtn.disabled = false;
