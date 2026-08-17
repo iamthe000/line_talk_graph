@@ -3,45 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LINEトーク履歴：レーシングバーチャート</title>
+    <title>LINEトーク：究極スムーズ・デイリーレース</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 20px; background-color: #f0f2f5; }
         .container { max-width: 1100px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        h1 { text-align: center; color: #00B900; margin-bottom: 30px; }
+        h1 { text-align: center; color: #00B900; margin-bottom: 30px; font-weight: 800; letter-spacing: -1px; }
         .controls { background: #fafafa; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 25px; display: flex; flex-direction: column; gap: 15px; }
-        #dateDisplay { font-size: 36px; font-weight: bold; text-align: right; color: #333; font-variant-numeric: tabular-nums; letter-spacing: 2px; }
+        #dateDisplay { font-size: 42px; font-weight: bold; text-align: right; color: #333; font-family: 'Consolas', 'Monaco', monospace; font-variant-numeric: tabular-nums; }
         .chart-container { position: relative; height: 600px; width: 100%; background: white; }
-        .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-        button { padding: 12px 25px; cursor: pointer; border: none; border-radius: 6px; background: #00B900; color: white; font-weight: bold; transition: 0.2s; }
-        button:hover { background: #009e00; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-group { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        button { padding: 12px 28px; cursor: pointer; border: none; border-radius: 8px; background: #00B900; color: white; font-weight: bold; transition: all 0.2s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        button:hover { background: #009e00; transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+        button:active { transform: translateY(0); }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; box-shadow: none; }
         .record-btn { background: #e91e63; }
         .record-btn:hover { background: #c2185b; }
-        #loading { text-align: center; font-weight: bold; color: #666; display: none; }
-        .status-msg { text-align: center; color: #e91e63; font-weight: bold; margin-top: 10px; min-height: 1.2em; }
+        .status-msg { text-align: center; color: #e91e63; font-weight: bold; margin-top: 10px; min-height: 1.2em; font-size: 0.9em; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>LINE Talk History Race</h1>
+    <h1>LINE Daily Dead Heat</h1>
 
     <div class="controls">
         <label style="font-weight: bold;">1. LINEのトーク履歴(.txt)を複数選択してください</label>
-        <input type="file" id="fileInput" multiple accept=".txt">
-        
-        <div id="loading">データを解析中...</div>
-
+        <input type="file" id="fileInput" multiple accept=".txt" style="color: #333; font-size: 0.9em;">
         <div class="btn-group">
-            <button id="startBtn" disabled>レース再生</button>
-            <button id="recordBtn" class="record-btn" disabled>録画して保存</button>
-            <button id="resetBtn" disabled>リセット</button>
+            <button id="startBtn" disabled>Race Start</button>
+            <button id="recordBtn" class="record-btn" disabled>Record</button>
+            <button id="resetBtn" disabled>Reset</button>
         </div>
         <div id="statusMsg" class="status-msg"></div>
     </div>
 
-    <div id="dateDisplay">---</div>
+    <div id="dateDisplay">----/--/--</div>
     <div class="chart-container">
         <canvas id="myChart"></canvas>
     </div>
@@ -53,30 +50,29 @@
     let allNames = [];
     let nameToColor = {};
     let chartInstance = null;
-    let animationId = null;
-    let currentDateIdx = 0;
     
-    let mediaRecorder;
-    let recordedChunks = [];
-    let videoExtension = 'webm'; // デフォルト
+    let currentFrame = 0;
+    const framesPerDay = 20; 
+    let isRunning = false;
+    let animationReqId = null;
+    let onCompleteCallback = null;
+
+    const colorPalette = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#2ecc71', '#e84393', '#00cec9', '#fab1a0'];
 
     const fileInput = document.getElementById('fileInput');
     const startBtn = document.getElementById('startBtn');
     const recordBtn = document.getElementById('recordBtn');
     const resetBtn = document.getElementById('resetBtn');
     const dateDisplay = document.getElementById('dateDisplay');
-    const loading = document.getElementById('loading');
     const statusMsg = document.getElementById('statusMsg');
-
-    const colorPalette = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#8bc34a', '#e91e63', '#00bcd4', '#ffc107'];
 
     fileInput.addEventListener('change', async (e) => {
         const files = Array.from(e.target.files);
         if (files.length === 0) return;
 
-        loading.style.display = 'block';
         dailyData = {};
         allNames = [];
+        statusMsg.innerText = "Loading data...";
 
         for (let i = 0; i < files.length; i++) {
             const name = files[i].name.replace(/\.[^/.]+$/, "");
@@ -98,159 +94,220 @@
         }
 
         allDates = Object.keys(dailyData).sort();
+        
+        // 累積データの作成
         let cumulative = {};
+        let cumulativeDailyData = {};
         allNames.forEach(n => cumulative[n] = 0);
+        
         allDates.forEach(date => {
+            cumulativeDailyData[date] = {};
             allNames.forEach(name => {
                 cumulative[name] += (dailyData[date][name] || 0);
-                dailyData[date][name] = cumulative[name];
+                cumulativeDailyData[date][name] = cumulative[name];
             });
         });
+        dailyData = cumulativeDailyData;
 
         initChart();
         startBtn.disabled = false;
         recordBtn.disabled = false;
         resetBtn.disabled = false;
-        loading.style.display = 'none';
-        dateDisplay.innerText = allDates[0];
+        statusMsg.innerText = "Ready to Race!";
     });
 
     function initChart() {
         const ctx = document.getElementById('myChart').getContext('2d');
         if (chartInstance) chartInstance.destroy();
 
-        const initialDate = allDates[0];
-        const sortedData = getSortedData(initialDate);
+        const startDate = allDates[0];
+        const dataObjects = allNames.map(name => ({
+            name: name,
+            value: dailyData[startDate][name] || 0,
+            color: nameToColor[name]
+        })).sort((a, b) => b.value - a.value);
+
+        const initialMax = Math.max(...dataObjects.map(d => d.value)) * 1.1 || 10;
 
         chartInstance = new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: sortedData.map(d => d.name),
+                labels: dataObjects.map(d => d.name),
                 datasets: [{
-                    data: sortedData.map(d => d.value),
-                    backgroundColor: sortedData.map(d => nameToColor[d.name]),
-                    borderWidth: 0,
-                    borderRadius: 5
+                    data: dataObjects.map(d => d.value),
+                    backgroundColor: dataObjects.map(d => d.color),
+                    borderRadius: 8,
+                    borderWidth: 0
                 }]
             },
             options: {
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: { 
-                    duration: 600, // 入れ替わりの時間を少し長くして視認性をアップ
-                    easing: 'easeInOutCubic' // 加速・減速をつけて「抜かされる感」を演出
-                },
+                animation: false, 
                 scales: {
-                    x: { beginAtZero: true },
-                    y: { grid: { display: false }, ticks: { font: { size: 16, weight: 'bold' } } }
+                    x: { 
+                        beginAtZero: true,
+                        min: 0,
+                        max: initialMax,
+                        grid: { color: '#eee' },
+                        ticks: { 
+                            color: '#999', 
+                            font: { weight: 'bold' },
+                            precision: 1 
+                        }
+                    },
+                    y: { 
+                        grid: { display: false },
+                        ticks: { 
+                            color: '#444', 
+                            font: { size: 15, weight: 'bold' },
+                            autoSkip: false 
+                        },
+                        afterFit: (axis) => { axis.width = 150; }
+                    }
                 },
-                plugins: { legend: { display: false } }
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { enabled: false }
+                }
             }
         });
+        dateDisplay.innerText = startDate;
     }
 
-    function getSortedData(date) {
-        return allNames.map(name => ({
-            name: name,
-            value: dailyData[date][name] || 0
-        })).sort((a, b) => b.value - a.value);
+    function getInterpolatedData(frameIdx) {
+        const dateIdx = Math.floor(frameIdx / framesPerDay);
+        const subFrame = frameIdx % framesPerDay;
+        const ratio = subFrame / framesPerDay;
+
+        const currentDate = allDates[dateIdx];
+        const nextDate = allDates[dateIdx + 1] || currentDate;
+
+        const data = allNames.map(name => {
+            const startVal = dailyData[currentDate][name] || 0;
+            const endVal = dailyData[nextDate][name] || 0;
+            const currentValue = startVal + (endVal - startVal) * ratio;
+            return { name, value: currentValue, color: nameToColor[name] };
+        });
+
+        const sortedData = data.sort((a, b) => b.value - a.value);
+        const currentMax = Math.max(...sortedData.map(d => d.value));
+
+        return {
+            label: currentDate,
+            data: sortedData,
+            suggestedMax: currentMax * 1.15 
+        };
     }
 
-    function updateChart(dateIdx) {
-        const date = allDates[dateIdx];
-        dateDisplay.innerText = date;
-        const sortedData = getSortedData(date);
-        chartInstance.data.labels = sortedData.map(d => d.name);
-        chartInstance.data.datasets[0].data = sortedData.map(d => d.value);
-        chartInstance.data.datasets[0].backgroundColor = sortedData.map(d => nameToColor[d.name]);
-        chartInstance.update();
+    function raceLoop() {
+        if (!isRunning) return;
+
+        if (currentFrame >= (allDates.length - 1) * framesPerDay) {
+            stopRace();
+            startBtn.innerText = "FINISH";
+            if (onCompleteCallback) {
+                onCompleteCallback();
+                onCompleteCallback = null;
+            }
+            return;
+        }
+
+        currentFrame++;
+        const frameInfo = getInterpolatedData(currentFrame);
+        
+        dateDisplay.innerText = frameInfo.label;
+        chartInstance.data.labels = frameInfo.data.map(d => d.name);
+        chartInstance.data.datasets[0].data = frameInfo.data.map(d => d.value);
+        chartInstance.data.datasets[0].backgroundColor = frameInfo.data.map(d => d.color);
+        
+        chartInstance.options.scales.x.max = frameInfo.suggestedMax;
+        
+        chartInstance.update('none'); 
+
+        animationReqId = requestAnimationFrame(raceLoop);
     }
 
     function startRace(onComplete) {
-        // アニメーションのduration(600)と揃えることで、滑らかに連続して動くようにする
-        animationId = setInterval(() => {
-            if (currentDateIdx < allDates.length - 1) {
-                currentDateIdx++;
-                updateChart(currentDateIdx);
-            } else {
-                clearInterval(animationId);
-                animationId = null;
-                startBtn.innerText = "再生終了";
-                if (onComplete) onComplete();
-            }
-        }, 600); 
+        if (isRunning) return;
+        isRunning = true;
+        startBtn.innerText = "STOP";
+        onCompleteCallback = onComplete || null;
+        animationReqId = requestAnimationFrame(raceLoop);
+    }
+
+    function stopRace() {
+        isRunning = false;
+        if (animationReqId) {
+            cancelAnimationFrame(animationReqId);
+            animationReqId = null;
+        }
+        startBtn.innerText = "RESUME";
     }
 
     startBtn.addEventListener('click', () => {
-        if (animationId) {
-            clearInterval(animationId);
-            animationId = null;
-            startBtn.innerText = "再開";
-        } else {
-            startBtn.innerText = "一時停止";
-            startRace();
-        }
-    });
-
-    recordBtn.addEventListener('click', () => {
-        currentDateIdx = 0;
-        updateChart(0);
-        recordedChunks = [];
-        
-        const canvas = document.getElementById('myChart');
-        const stream = canvas.captureStream(30);
-
-        // MP4に対応しているかチェックし、対応していればMP4、ダメならWebMを選択
-        let options = { mimeType: 'video/webm; codecs=vp9' };
-        if (MediaRecorder.isTypeSupported('video/mp4')) {
-            options = { mimeType: 'video/mp4' };
-            videoExtension = 'mp4';
-        } else if (MediaRecorder.isTypeSupported('video/webm; codecs=h264')) {
-            options = { mimeType: 'video/webm; codecs=h264' };
-            videoExtension = 'webm';
-        }
-
-        try {
-            mediaRecorder = new MediaRecorder(stream, options);
-        } catch (e) {
-            // フォールバック
-            mediaRecorder = new MediaRecorder(stream);
-        }
-
-        mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) recordedChunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(recordedChunks, { type: options.mimeType || 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `line-race-${new Date().getTime()}.${videoExtension}`;
-            a.click();
-            statusMsg.innerText = `${videoExtension.toUpperCase()}形式で保存が完了しました！`;
-            recordBtn.disabled = false;
-        };
-
-        mediaRecorder.start();
-        statusMsg.innerText = "録画中... アニメーション終了までお待ちください";
-        recordBtn.disabled = true;
-
-        startRace(() => {
-            mediaRecorder.stop();
-        });
+        if (isRunning) stopRace();
+        else startRace();
     });
 
     resetBtn.addEventListener('click', () => {
-        clearInterval(animationId);
-        animationId = null;
-        currentDateIdx = 0;
-        startBtn.innerText = "レース再生";
-        statusMsg.innerText = "";
-        updateChart(0);
+        stopRace();
+        currentFrame = 0;
+        initChart();
+        startBtn.innerText = "Race Start";
+        statusMsg.innerText = "Race Reset.";
+    });
+
+    recordBtn.addEventListener('click', async () => {
+        currentFrame = 0;
+        initChart();
+        
+        const canvas = document.getElementById('myChart');
+        const stream = canvas.captureStream(60); 
+
+        // MIMEタイプチェックを復旧
+        let options = { mimeType: 'video/webm; codecs=vp9' };
+        let extension = 'webm';
+        if (MediaRecorder.isTypeSupported('video/mp4')) {
+            options = { mimeType: 'video/mp4' };
+            extension = 'mp4';
+        } else if (MediaRecorder.isTypeSupported('video/webm; codecs=h264')) {
+            options = { mimeType: 'video/webm; codecs=h264' };
+            extension = 'webm';
+        }
+
+        const recorder = new MediaRecorder(stream, { 
+            ...options,
+            videoBitsPerSecond: 8000000 
+        });
+        const chunks = [];
+
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: options.mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `line-daily-race.${extension}`;
+            a.click();
+            statusMsg.innerText = "Record Complete!";
+            recordBtn.disabled = false;
+            startBtn.disabled = false;
+        };
+
+        statusMsg.innerText = "⏺ Recording... (Please wait until Finish)";
+        recordBtn.disabled = true;
+        startBtn.disabled = true;
+        recorder.start();
+        
+        startRace(() => {
+            setTimeout(() => {
+                recorder.stop();
+                stopRace();
+            }, 500); 
+        });
     });
 </script>
-
 </body>
 </html>
